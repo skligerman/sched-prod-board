@@ -1,19 +1,122 @@
-import { fetchIncidents } from './api.js';
+import { fetchIncidents, ack } from './api.js';
+
+const REFRESH_MS = 2000;
 
 const list = document.querySelector('[data-testid="incident-list"]');
+const loader = document.querySelector('[data-testid="loader"]');
+const empty = document.querySelector('[data-testid="empty"]');
+const status = document.getElementById('status');
 
-function render(incidents) {
-  list.innerHTML = incidents
-    .map(
-      (i) => `<li data-testid="incident-row" data-id="${i.id}" class="row ${i.severity}">
-        <span class="id">${i.id}</span>
-        <span class="sev">${i.severity}</span>
-        <span class="what">${i.service} · ${i.region} · ${i.summary}</span>
-        <time datetime="${i.openedAt}">${i.openedAt}</time>
-      </li>`,
-    )
-    .join('');
+const rows = new Map(); // incident id -> <li>
+const acked = new Set(); // incident ids acked in this session
+
+// R5: viewer's local time zone and locale order (dd/mm for EU locales). Full UTC stays in datetime=.
+const fmt = new Intl.DateTimeFormat(undefined, {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+function makeRow(i) {
+  const li = document.createElement('li');
+  li.setAttribute('data-testid', 'incident-row');
+  li.dataset.id = i.id;
+  li.className = `row ${i.severity}`;
+
+  const id = document.createElement('span');
+  id.className = 'id';
+  id.textContent = i.id;
+
+  const sev = document.createElement('span');
+  sev.className = 'sev';
+  sev.textContent = i.severity;
+
+  const what = document.createElement('span');
+  what.className = 'what';
+  what.textContent = `${i.service} · ${i.region} · ${i.summary}`;
+
+  const time = document.createElement('time');
+  time.dateTime = i.openedAt;
+  time.textContent = fmt.format(new Date(i.openedAt));
+
+  const action = document.createElement('span');
+  action.className = 'action';
+  li.append(id, sev, what, time, action);
+  setAckState(li, i.id);
+  return li;
 }
 
-const page = await fetchIncidents();
-render(page.incidents);
+function setAckState(li, id) {
+  const action = li.querySelector('.action');
+  action.replaceChildren();
+  if (acked.has(id)) {
+    const mark = document.createElement('span');
+    mark.className = 'acked';
+    mark.setAttribute('data-testid', 'acked');
+    mark.textContent = '✓ acked';
+    action.append(mark);
+  } else {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.setAttribute('data-testid', 'ack');
+    btn.textContent = 'Ack';
+    action.append(btn);
+  }
+}
+
+// R1: newest first. Reuse existing rows so a refresh does not disturb a click in progress.
+function render(incidents) {
+  const sorted = [...incidents].sort((a, b) => Date.parse(b.openedAt) - Date.parse(a.openedAt));
+  const keep = new Set(sorted.map((i) => i.id));
+  for (const [id, li] of rows) {
+    if (!keep.has(id)) {
+      li.remove();
+      rows.delete(id);
+    }
+  }
+  sorted.forEach((i, idx) => {
+    let li = rows.get(i.id);
+    if (!li) {
+      li = makeRow(i);
+      if (loader.hidden) li.classList.add('new'); // flash only rows that arrive after the first load
+      rows.set(i.id, li);
+    }
+    if (list.children[idx] !== li) list.insertBefore(li, list.children[idx] ?? null);
+  });
+  empty.hidden = sorted.length > 0;
+}
+
+// R2: Ack sends the ack and marks the row acked.
+list.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-testid="ack"]');
+  if (!btn) return;
+  const li = btn.closest('[data-testid="incident-row"]');
+  const id = li.dataset.id;
+  btn.disabled = true;
+  try {
+    await ack(id);
+    acked.add(id);
+    setAckState(li, id);
+    status.textContent = '';
+  } catch (err) {
+    btn.disabled = false;
+    status.textContent = `ack failed: ${err.message}`;
+  }
+});
+
+// R3 + R4: loader until the first answer, then refresh every 2 s without overlapping requests.
+async function tick() {
+  try {
+    const page = await fetchIncidents();
+    render(page.incidents);
+    loader.hidden = true;
+    if (status.textContent.startsWith('offline')) status.textContent = '';
+  } catch (err) {
+    status.textContent = `offline, retrying (${err.message})`;
+  } finally {
+    setTimeout(tick, REFRESH_MS);
+  }
+}
+tick();
