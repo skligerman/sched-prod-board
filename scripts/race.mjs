@@ -57,6 +57,23 @@ await page.mouse.click(x, y); // a person's click: where the button was, no wait
 mark(`click at the same spot as ${landed} lands`);
 await page.waitForTimeout(2500);
 
+// With the confirm (step 2): the click only asks. Read what it names, cancel the wrong one, ack the row I meant.
+const confirmBox = page.locator(tid('confirm'));
+if (await confirmBox.count()) {
+  mark(`confirm shows: "${await confirmBox.first().innerText().then((t) => t.replace(/\s+/g, ' '))}"`);
+  await page.waitForTimeout(2500);
+  await page.locator(tid('confirm-cancel')).click();
+  mark(`cancelled the wrong one; acked so far: ${(await page.locator(tid('acked')).count()) || 'none'}`);
+  await page.waitForTimeout(1500);
+  const mine = page.locator(`${tid('incident-row')}[data-id="${meant}"]`);
+  await mine.locator(tid('ack')).click();
+  mark(`confirm for ${meant}: "${await mine.locator(tid('confirm')).innerText().then((t) => t.replace(/\s+/g, ' '))}"`);
+  await page.waitForTimeout(2000);
+  await mine.locator(tid('confirm-ack')).click();
+  await mine.locator(tid('acked')).waitFor();
+  mark(`${meant} acked on purpose`);
+}
+
 const acked = await page.locator(`${tid('incident-row')}:has(${tid('acked')})`).evaluateAll((rs) => rs.map((r) => r.dataset.id));
 const order = await page.locator(tid('incident-row')).evaluateAll((rs) => rs.slice(0, 3).map((r) => r.dataset.id));
 mark(`top rows now: ${order.join(', ')}; acked rows: ${acked.join(', ') || 'none'}`);
