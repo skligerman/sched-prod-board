@@ -88,20 +88,50 @@ function render(incidents) {
   empty.hidden = sorted.length > 0;
 }
 
-// R2: Ack sends the ack and marks the row acked.
+// R2 (product's decision after step 1): Ack asks to confirm, and the confirm names the incident id.
+// The confirm lives in the row it was asked for, so a new incident landing above cannot change which id it names.
+function askConfirm(li, id) {
+  const action = li.querySelector('.action');
+  const box = document.createElement('span');
+  box.className = 'confirm';
+  box.setAttribute('data-testid', 'confirm');
+  box.setAttribute('role', 'group');
+  box.setAttribute('aria-label', `Confirm ack of ${id}`);
+
+  const text = document.createElement('span');
+  text.textContent = `Ack ${id}?`;
+
+  const yes = document.createElement('button');
+  yes.type = 'button';
+  yes.setAttribute('data-testid', 'confirm-ack');
+  yes.textContent = `Ack ${id}`;
+
+  const no = document.createElement('button');
+  no.type = 'button';
+  no.setAttribute('data-testid', 'confirm-cancel');
+  no.textContent = 'Cancel';
+
+  box.append(text, yes, no);
+  action.replaceChildren(box);
+  no.focus(); // the safe choice is the default
+}
+
 list.addEventListener('click', async (e) => {
-  const btn = e.target.closest('[data-testid="ack"]');
-  if (!btn) return;
-  const li = btn.closest('[data-testid="incident-row"]');
+  const li = e.target.closest('[data-testid="incident-row"]');
+  if (!li) return;
   const id = li.dataset.id;
-  btn.disabled = true;
+  if (e.target.closest('[data-testid="ack"]')) return askConfirm(li, id);
+  if (e.target.closest('[data-testid="confirm-cancel"]')) return setAckState(li, id);
+  const yes = e.target.closest('[data-testid="confirm-ack"]');
+  if (!yes) return;
+  yes.disabled = true;
   try {
     await ack(id);
     acked.add(id);
     setAckState(li, id);
     status.textContent = '';
   } catch (err) {
-    btn.disabled = false;
+    yes.disabled = false;
     status.textContent = `ack failed: ${err.message}`;
   }
 });
